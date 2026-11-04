@@ -16,6 +16,7 @@ eggs/
 .eggs/
 lib/
 lib64/
+!Postprocessing/lib/
 parts/
 sdist/
 var/
@@ -218,3 +219,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Postprocessing: generated outputs (pipeline results, caches)
+Postprocessing/Output/
