@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check the logs for contacts the Base filed under the wrong beacon (Background Information 3.3.1).
 
-Until 2026-08-15 18:43 the Base labelled every forwarded message with the ID of the beacon it
+Until the Base fix (study.toml [times] base_fix) the Base labelled every forwarded message with the ID of the beacon it
 had connected to last. A message of beacon A still in transit when the Base connected to
 beacon B was logged under B's ID, right after B's header. Such contacts continue A's timers
 and do not fit B's Current Timer. The check runs on every readout of the logs, without a time
@@ -22,7 +22,7 @@ T1 Timer above Current Timer: contacts with a timer more than EXCESS_S above the
      header (+ EXCESS_S);
    - "not explained".
 T2 Self-sighting: a beacon never records itself; contacts with ID2 = ID1 are foreign. In logs
-   without the ID correction (BI 3.2.1), ID1 0-9 before 2026-08-15 22:00 can be beacon d + 48,
+   without the ID correction (BI 3.2.1), ID1 0-9 before [id_bug] until can be beacon d + 48,
    which may record d: not testable, counted separately.
 T3 Contacts before the header: contact lines between the Status line and the Current Timer
    line of the same readout.

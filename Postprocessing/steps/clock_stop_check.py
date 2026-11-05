@@ -113,7 +113,8 @@ class Records:
         keep = np.isfinite(real) & (id1_r[rd] >= 0) & (id1_r[rd] != b2)
         self.rd, self.tm, self.real = rd[keep], tm[keep], real[keep]
         self.id1, self.id2 = id1_r[self.rd], b2[keep]
-        self.pair = self._split(self.id1 * 1000 + self.id2, self.real)
+        self.base = int(max(self.id1.max(initial=0), self.id2.max(initial=0))) + 1     # key = id1 * base + id2
+        self.pair = self._split(self.id1 * self.base + self.id2, self.real)
         order = np.lexsort((self.real, self.id2))
         s_id2, s_real, s_id1 = self.id2[order], self.real[order], self.id1[order]
         cuts = np.flatnonzero(np.diff(s_id2)) + 1
@@ -128,7 +129,9 @@ class Records:
         return {int(sc[a]): st[a:e] for a, e in zip(np.r_[0, cuts], np.r_[cuts, len(sc)])}
 
     def pair_times(self, recorder: int, seen: int) -> np.ndarray:
-        return self.pair.get(recorder * 1000 + seen, np.empty(0))
+        if not (0 <= recorder < self.base and 0 <= seen < self.base):
+            return np.empty(0)
+        return self.pair.get(recorder * self.base + seen, np.empty(0))
 
     def count(self, recorder: int, seen: int, a: float, z: float) -> int:
         t = self.pair_times(recorder, seen)

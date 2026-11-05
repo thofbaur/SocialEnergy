@@ -16,8 +16,11 @@ offset. Edges carry the timing:
 - each start (end) of A->B is matched with the nearest start (end) of B->A within +-MATCH_S;
   dt = A's time - B's time. Chance level: the same with B's edges shifted by CHANCE_SHIFT_S.
 
-Reported per precision class of A's record at the edge (the class of its period's boot, section 21)
-and per beacon the median signed dt (a shifted boot shows as a systematic offset).
+Reported per precision class of A's record at the edge and per beacon the median signed dt (a
+shifted boot shows as a systematic offset). The class is read from the record's precision
+(classify: the largest class of model_dating.PRECISION_S it reaches): the class of the readout that
+fixes its time plus the drift term from that readout (section 21), so a record far from it counts
+in a higher class.
 Output: <quality dir>/both_sides_check.csv (per beacon and class: edges, median dt, median |dt|, 90 % |dt|,
 share within 30 s; ID1 "all": the totals per class).
 """

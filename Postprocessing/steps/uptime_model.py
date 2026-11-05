@@ -102,13 +102,6 @@ FIT_AWAY_S = 600
 FIT_MATCH_S = 600                  # a candidate boot within this of the peak matches it (the record match runs a few
                                    # minutes early: it sees co-presence, not the encounter edge; test D)
 FIT_MIN_COUNT, FIT_BACKGROUND = 50, 4.0  # ... at least this many matches and this times the median
-# Partners' records as boot evidence for readouts with Current Timer (option tested 2026-10-20 and
-# switched off: 570 readouts got a boot, median 30 s and in a quarter more than 3 min earlier than
-# the model's, H4 40 -> 74 in the deployment and 34 -> 245 on the setup day, both-sides check and
-# validation not better; the record match is too coarse for boots, it only decides between periods)
-USE_RECORD_EVIDENCE = False
-REC_MAX_WIDTH_S, REC_MIN_RATIO = 120, 1.3
-REC_MIN_COUNT, REC_BACKGROUND = 30, 4.0
 MOVE_MAX_S = 90                    # ... a candidate's boot may move at most this much earlier to fit it
 HL_LOW_QUANTILE = 10               # %: the "oldest" contact of a readout without Current Timer (robust against
                                    # contacts sent twice after a lost confirmation, BI 3.1.4)
@@ -194,11 +187,6 @@ def read_drifts(tz_dir: Path) -> tuple[dict[str, float], float]:
             values.append(drifts[row["ID"]])
     centre = float(np.median(values)) if values else tza.DRIFT_S_PER_S
     return drifts, centre
-
-
-# eco sessions [(readout index, enter timer, leave timer)] of the logs read by read_contacts (eco_out),
-# used by contact_boots to leave the beacon's own records during its eco sessions out of the edges
-ECO_SESSIONS: list = []
 
 
 def read_contacts(log_dir: Path, readouts: list[dict], drift_of, hl_limit: dict | None = None,
@@ -340,7 +328,7 @@ def edge_offsets(queries: list[tuple[int, int, np.ndarray, int, int]], edges: li
     return out
 
 
-def contact_boots(readouts, assign, boots, drift, rd, b2, tm, diffs_out: dict | None = None
+def contact_boots(readouts, assign, boots, drift, rd, b2, tm, diffs_out: dict | None = None, eco=()
                   ) -> dict[int, tuple[float, int, int, float]]:
     """Boot of each readout from its own contacts against the partners' current periods:
     readout -> (boot, peak, second peak, background: mean count per +-MATCH_S window in the searched
@@ -349,7 +337,9 @@ def contact_boots(readouts, assign, boots, drift, rd, b2, tm, diffs_out: dict | 
     than that would merge two periods; daily routines give look-alike peaks about a day apart), not
     after the readout's own upper limit (H1).
     diffs_out (optional): for the readouts given as its keys, filled with (boot of the assigned
-    period, sorted offsets of the matched encounter edges)."""
+    period, sorted offsets of the matched encounter edges).
+    eco: the eco sessions [(readout index, enter timer, leave timer)] (read_contacts, eco_out): the
+    beacon's own records during them are left out of the edges (none given: all records count)."""
     keys = sorted(boots)
     kidx = {k: i for i, k in enumerate(keys)}
     p_boot = np.array([boots[k] for k in keys]); p_drift = np.array([drift(k[0]) for k in keys])
@@ -361,8 +351,8 @@ def contact_boots(readouts, assign, boots, drift, rd, b2, tm, diffs_out: dict | 
     own = beacon[u] != cb2
     u, crd, cb2, ctm = u[own], crd[own], cb2[own], ctm[own]
     # records made during the beacon's own eco sessions (one scan per 300 s, BI 2.3) are no edges
-    if ECO_SESSIONS:
-        sessions = cs.eco_sessions_of_units(r_unit, [r["ct"] for r in readouts], ECO_SESSIONS)
+    if eco:
+        sessions = cs.eco_sessions_of_units(r_unit, [r["ct"] for r in readouts], eco)
         keep = ~cs.eco_flags(u, ctm, sessions)
         u, crd, cb2, ctm = u[keep], crd[keep], cb2[keep], ctm[keep]
     ev_p = cs.transitions(p_boot, p_drift, u, cb2, ctm)
@@ -614,8 +604,8 @@ def _fit(args, pool: ProcessPoolExecutor):
     windows = battery_windows(args.output_dir / pp.OUTPUT_QUALITY_DIR / "battery_replacement_check.csv")
     print(f"Uptime model: {len(readouts)} readouts; reading the contacts (fake record check first) ...", flush=True)
     hl_limit: dict = {}
-    ECO_SESSIONS.clear()
-    rd, b2, tm, lb, fakes = read_contacts(args.log_dir, readouts, drift_of, hl_limit, ECO_SESSIONS)
+    eco: list = []                                  # eco sessions, for the edges of contact_boots
+    rd, b2, tm, lb, fakes = read_contacts(args.log_dir, readouts, drift_of, hl_limit, eco)
     with (tz_dir / FAKES_CSV).open("w", newline="", encoding="utf-8") as f:
         csv.writer(f).writerows([["Log file", "Line"], *fakes])
     print(f"  {len(rd)} contacts, {len(fakes)} fake records left out ({tz_dir / FAKES_CSV}), "
@@ -632,19 +622,14 @@ def _fit(args, pool: ProcessPoolExecutor):
     boots = {k: v[0] for k, v in model.items()}
     before = {k: v[0] for k, v in model.items()}
     order = sorted(with_ct)                                   # log order
-    record_ev: dict = {}
 
     def iterate(it: int, label: str = ""):
         nonlocal assign, boots
-        cb = contact_boots(readouts, assign, boots, lambda b: drift_of(b), rd, b2, tm)
+        cb = contact_boots(readouts, assign, boots, lambda b: drift_of(b), rd, b2, tm, eco=eco)
         reliable = {i: (v[0], min(math.log(v[1]), 5.0)) for i, v in cb.items()
                     if contact_reliable(v)
                     and (args.evidence_days == "all" or (readouts[i]["header"] is not None and
                          datetime.fromtimestamp(readouts[i]["header"]).toordinal() % 2 == (args.evidence_days == "odd")))}
-        for i, v in record_ev.items():               # boots from the partners' records where edges are not reliable
-            if i not in reliable and (args.evidence_days == "all" or
-                                      datetime.fromtimestamp(readouts[i]["header"]).toordinal() % 2 == (args.evidence_days == "odd")):
-                reliable[i] = v[:2]
         # real times of all readouts under the current solution, for H4
         real = {}
         for i in order:
@@ -732,12 +717,6 @@ def _fit(args, pool: ProcessPoolExecutor):
         return result
 
     changed, reliable, cb, flags, inputs = converge()
-    # boots from the partners' records for the readouts without a reliable boot from encounter edges
-    if USE_RECORD_EVIDENCE:
-        record_ev.update(record_evidence(readouts, assign, boots, drift_of, rd, b2, tm, set(reliable)))
-        print(f"  boots from the partners' records: {len(record_ev)} readouts, {time.time() - t0:.0f} s", flush=True)
-    if record_ev:
-        changed, reliable, cb, flags, inputs = converge(" (with the partners' records)")
     headerless = []
     if args.evidence_days == "all":
         # readouts without Current Timer: assign, let them bound their period's boot, solve again
@@ -748,7 +727,7 @@ def _fit(args, pool: ProcessPoolExecutor):
     return types.SimpleNamespace(tz_dir=tz_dir, readouts=readouts, beacons=beacons, assign=assign, boots=boots,
                                  lb=lb, reliable=reliable, cb=cb, drift_of=drift_of, model=model, before=before,
                                  flags=flags, inputs=inputs, segments=segs_of(beacons, assign),
-                                 contacts=(rd, b2, tm), headerless=headerless, record_ev=record_ev,
+                                 contacts=(rd, b2, tm), headerless=headerless,
                                  hl_limit=hl_limit)
 
 
@@ -1042,29 +1021,31 @@ def assign_headerless(readouts, assign, boots, drift_of, rd, b2, tm, hl_limit):
     return [rows[h] for h in sorted(rows)], attach
 
 
-def copresence_index(readouts, assign, boots, drift_of, rd, b2, tm) -> tuple[np.ndarray, np.ndarray]:
-    """Sorted keys of the dated records in COP_BIN_S bins: (partner, beacon seen, bin) and (partner, bin)."""
+def copresence_index(readouts, assign, boots, drift_of, rd, b2, tm) -> tuple[np.ndarray, np.ndarray, int]:
+    """Sorted keys of the dated records in COP_BIN_S bins: (partner, beacon seen, bin) and (partner, bin),
+    and the base of the ID pair (partner * base + beacon seen: above every ID)."""
     owner = np.array([int(r["ID"]) if r["ID"].isdigit() else -1 for r in readouts], dtype=np.int64)
     unit_boot = np.array([boots.get(assign.get(i), np.nan) for i in range(len(readouts))])
     unit_drift = np.array([drift_of(r["ID"]) for r in readouts])
     ok = ~np.isnan(unit_boot[rd]) & (owner[rd] >= 0)
     o = owner[rd[ok]]
     t_bin = ((unit_boot[rd[ok]] + tm[ok] * (1 + unit_drift[rd[ok]])) // COP_BIN_S).astype(np.int64)
-    seen = np.unique(((o * 1024 + b2[ok].astype(np.int64)) << 32) + t_bin)
+    base = int(max(owner.max(initial=0), b2.max(initial=0))) + 1
+    seen = np.unique(((o * base + b2[ok].astype(np.int64)) << 32) + t_bin)
     active = np.unique((o << 32) + t_bin)
-    return seen, active
+    return seen, active, base
 
 
 def copresence(index, beacon: str, partners: np.ndarray, timers: np.ndarray, boot: float, drift: float) -> tuple[int, int]:
     """Of a readout's contacts dated with boot: how many fall where their partner was recording (any record
     within COP_WINDOW_S), and of those how many where it recorded the beacon (within COP_WINDOW_S)."""
-    seen, active = index
+    seen, active, base = index
     w = COP_WINDOW_S // COP_BIN_S
     t_bin = ((boot + timers * (1 + drift)) // COP_BIN_S).astype(np.int64)
     p = partners.astype(np.int64)
     a_key = (p << 32) + t_bin
     act = np.searchsorted(active, a_key + w, side="right") > np.searchsorted(active, a_key - w)
-    s_key = ((p * 1024 + int(beacon)) << 32) + t_bin
+    s_key = ((p * base + int(beacon)) << 32) + t_bin      # p: IDs of contacts, below base
     rec = act & (np.searchsorted(seen, s_key + w, side="right") > np.searchsorted(seen, s_key - w))
     return int(act.sum()), int(rec.sum())
 
@@ -1096,7 +1077,8 @@ def fit_from_partners(readouts, assign, boots, drift_of, rd, b2, tm, targets, ma
     sel = np.isin(b2, ids) & ~np.isnan(unit_boot[rd]) & (owner[rd] >= 0)
     p_b2, p_owner = b2[sel].astype(np.int64), owner[rd[sel]]
     p_real = unit_boot[rd[sel]] + tm[sel] * (1 + unit_drift[rd[sel]])
-    key = p_b2 * 1024 + p_owner                          # partner records grouped by (beacon seen, partner)
+    base = int(max(owner.max(initial=0), b2.max(initial=0))) + 1     # above every ID of a key
+    key = p_b2 * base + p_owner                          # partner records grouped by (beacon seen, partner)
     srt = np.lexsort((p_real, key))
     key, p_real = key[srt], p_real[srt]
     order = np.argsort(rd, kind="stable")
@@ -1115,7 +1097,7 @@ def fit_from_partners(readouts, assign, boots, drift_of, rd, b2, tm, targets, ma
         own_p, own_t = b2[mine], tm[mine]
         for p in np.unique(own_p):
             ot = np.unique(own_t[own_p == p] // FIT_BIN_S).astype(np.int64)
-            k0, k1 = np.searchsorted(key, a * 1024 + p), np.searchsorted(key, a * 1024 + p, side="right")
+            k0, k1 = np.searchsorted(key, a * base + p), np.searchsorted(key, a * base + p, side="right")
             if k1 <= k0:
                 continue
             t_lo, t_hi = lo + ot.min() * FIT_BIN_S - 3600, hi + ot.max() * FIT_BIN_S + 3600
@@ -1144,31 +1126,6 @@ def fit_from_partners(readouts, assign, boots, drift_of, rd, b2, tm, targets, ma
                 and peak >= background * max(np.median(sm), 1.0)):
             out[h] = ((b0 + k) * FIT_BIN_S, (b0 + top.min()) * FIT_BIN_S, (b0 + top.max()) * FIT_BIN_S, int(peak), ratio)
     return out
-
-
-def record_evidence(readouts, assign, boots, drift_of, rd, b2, tm, skip) -> dict:
-    """Boots from the partners' records (fit_from_partners, strict criteria REC_*) for the readouts
-    with Current Timer of the model that have no reliable boot from encounter edges (skip). Range
-    as in contact_boots: not before the flashing nor the boot of the period before, not after the
-    readout's upper limit (H1). Returns readout -> (boot, weight) like the edge evidence."""
-    prev_boot = {}
-    by_beacon = collections.defaultdict(list)
-    for k in boots:
-        by_beacon[k[0]].append(k)
-    for ks in by_beacon.values():
-        ks.sort(key=lambda k: boots[k])
-        for n, k in enumerate(ks):
-            prev_boot[k] = boots[ks[n - 1]] if n else -INF
-    targets = []
-    for i, k in assign.items():
-        r = readouts[i]
-        if k not in boots or i in skip or r["ct"] is None or r["header"] is None:
-            continue
-        hi = r["header"] - r["ct"] * (1 + drift_of(r["ID"])) + hrc.eps(r["ct"])
-        targets.append((i, max(FLASH_START_TS, prev_boot[k] - MATCH_S), hi))
-    fits = fit_from_partners(readouts, assign, boots, drift_of, rd, b2, tm, targets, max_width=REC_MAX_WIDTH_S,
-                             min_ratio=REC_MIN_RATIO, min_count=REC_MIN_COUNT, background=REC_BACKGROUND)
-    return {i: (f[0], min(math.log(f[3]), 5.0), f[3], f[2] - f[1]) for i, f in fits.items()}
 
 
 def apply_caps(beacons, attach, hl_limit) -> bool:
@@ -1244,7 +1201,7 @@ def run(args) -> None:
     tz_dir, readouts, flags = st.tz_dir, st.readouts, st.flags
     suffix = "" if args.evidence_days == "all" else f"_{args.evidence_days}_days"
     write_outputs(tz_dir, readouts, st.assign, st.boots, st.beacons, st.lb, st.reliable, st.cb, st.drift_of, st.model,
-                  st.before, flags, suffix, st.record_ev, st.inputs)
+                  st.before, flags, suffix, st.inputs)
     print(f"  periods with a violated hard rule (the data contradicts itself): {sum(1 for f in flags.values() if f)}")
     # MAX_DELAY_S bounds where a reboot can lie (candidate cut points): a delay close to it may have
     # been cut by the bound instead of the data
@@ -1277,8 +1234,7 @@ def run(args) -> None:
 
 
 def write_outputs(tz_dir, readouts, assign, boots, beacons, lb, reliable, cb, drift_of, model, before, flags,
-                  suffix: str = "", record_ev: dict | None = None, inputs: dict | None = None) -> None:
-    record_ev = record_ev or {}
+                  suffix: str = "", inputs: dict | None = None) -> None:
     # readouts with a log-order prediction (references of other beacons before and after in the same file)
     log_order = {bc.idx[j] for b, bc in beacons.items() for j, v in (inputs or {}).get(b, ({}, {}, set()))[1].items()
                  if math.isfinite(v[3])}
@@ -1308,7 +1264,7 @@ def write_outputs(tz_dir, readouts, assign, boots, beacons, lb, reliable, cb, dr
         w = csv.writer(f)
         w.writerow(["ID", "Log file", "First line", "Line time of Current Timer", "Current Timer", "Period", "Boot",
                     "Real time", "Delay [s]", "Delay lower bound [s]", "Boot from its contacts", "Contact peak",
-                    "Second peak", "Reliable", "Period before", "Boot from the partners' records", "Records peak"])
+                    "Second peak", "Reliable", "Period before"])
         for i, r in enumerate(readouts):
             k = assign.get(i)
             if r["ct"] is None or k not in boots:
@@ -1318,8 +1274,7 @@ def write_outputs(tz_dir, readouts, assign, boots, beacons, lb, reliable, cb, dr
             c = cb.get(i)
             w.writerow([r["ID"], r["file"], r["first"], _fmt(r["header"]), r["ct"], k[1][1:], _fmt(boots[k]), _fmt(R),
                         round(r["header"] - R, 1), round(lb[i], 1), _fmt(c[0]) if c else "", c[1] if c else "",
-                        c[2] if c else "", "yes" if i in reliable else "", r["period"],
-                        _fmt(record_ev[i][0]) if i in record_ev else "", record_ev[i][2] if i in record_ev else ""])
+                        c[2] if c else "", "yes" if i in reliable else "", r["period"]])
 
 
 def main(argv: list[str]) -> int:

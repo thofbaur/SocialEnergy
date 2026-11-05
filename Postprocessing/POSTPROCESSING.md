@@ -7,7 +7,8 @@ of it is in `logger.toml` of the study folder (Input). Run them after a
 capture. The method is described in detail in
 `Postprocessing Method.md` (section numbers below refer to it); the system and
 the known issues of the data in `Background Information.md` (BI); open points
-in `ToDo.md` (both in the repository root).
+in `ToDo.md` (both in the repository root; the logger and firmware points in the firmware
+repository, `BeaconNRF54/ToDo.md`).
 
 ## Run order
 
@@ -29,11 +30,14 @@ when needed:
 - `python -m steps.id_split_analysis` - only steps 2 to 4 (fake records, first ID split, working
   copies of the logs), the same code as the pipeline's.
 - `python -m unittest discover -s tests` - the tests (seconds): configs, line patterns, fake
-  records, ID bug, eps, no module state. They use the study folder's configs.
+  records, ID bug, eps, no module state, cases of other studies (small duplicate files, IDs above
+  999, no contact pairs). They use the study folder's configs.
 - `python tools/compare_outputs.py <baseline Output> <new Output>` - regression check: two runs
   on the same study folder, file by file (SHA-256); after changes that should not change the data.
-- `python validate_model.py --refit --headerless 3` - synthetic validation of the uptime model
-  (section 19.1), from which the time precision of the records comes; after model changes.
+- `python validate_model.py --headerless 3` - synthetic validation of the uptime model
+  (section 19.1), from which the time precision of the records comes; after model changes. The
+  fit is cached and done again when the pipeline's model or `uptime_model.py` changed (`--refit`
+  forces it).
 - The slides on the state of the postprocessing (`make_presentation.py`) are not part of this
   folder: they live in `../Presentation/` and read this folder's `Output/pipeline/` and
   `Output/data/`; `python Presentation/make_presentation.py` from the repository root (about 2 min;
@@ -161,7 +165,7 @@ the shifts of the period's clock stops before the timer (section 21).
 | `reboots.csv` | Every boot: `ID`, `Beacon type`, `Period`, `Boot Local Time`, `Time precision [s]` (empty for a period never read out), `Cause` (`first boot`, `battery replacement <documented time>` - with `(period never read out)` if no readout followed -, `reset`), `Own records erased from`, `Own records erased [h]` (only where the partners saw the beacon: as `erased by reboot` in the coverage) |
 | `battery.csv` | `ID`, `Local Time` (real time of the readout), `Time precision [s]`, `Battery (mV)`, `Contact Count` (contacts stored at its start), `Status` - one row per readout with `Current Timer` |
 | `not_dated.csv` | Records without an uptime period or with a time outside the hard limits: kind (`Record`: contact / self-report / eco session), IDs, timer(s), log file, line, reason |
-| `coverage.csv` | Per beacon, non-overlapping intervals over the whole data: `recorded`, `erased by reboot`, `read out, not logged`, `dropped (storage full)`, `not recorded (no readout possible)`, `not seen (off or alone)` (within `erased by reboot`: the partners did not see the beacon, so it had no contacts to erase), `silent (clock stopped)`, `never read out`, `not read out`, `before first boot` (up to the first sighting by the partners, from there `erased by reboot`), `no data`; column `Eco` for reduced scanning (section 21). On the pieces of a lost-records gap, its evidence (columns `Lost from` … `Readout threshold`, per gap, repeated on each of its pieces; empty elsewhere): own records missing although the partners recorded the beacon: gaps between two readouts of a period, holes inside one readout and gaps at the start of a readout (column `Where`: `between readouts`, `inside a readout` - a readout with `Current Timer` only if its `Contact Count` shows missing contacts -, `start of a readout` - proven by the `Contact Count`, without partner records -, `before the first boot` - recorded by at least 3 partners before the beacon's first boot: erased by a reboot before its first readout with `Current Timer`); lost interval, cause (the `State`: `read out, not logged`, `dropped (storage full)`, `erased by reboot`, or `not recorded (no readout possible)`: a gap between readouts in which no readout was possible — the own records the beacon would have made there, times a factor calibrated on the logged readouts, stay below the smallest `Contact Count` of the readouts logged around it), partner records, readouts before and after, the full gap, `Own records expected`, `Readout threshold` (the readout test, Method 21). The hours of a gap are the sum of its pieces' `Hours` |
+| `coverage.csv` | Per beacon, non-overlapping intervals over the whole data: `recorded`, `erased by reboot`, `read out, not logged`, `dropped (storage full)`, `dropped (storage full) and read out, not logged` (both: the flash ran full and a readout not logged emptied it), `not recorded (no readout possible)`, `not seen (off or alone)` (within `erased by reboot`: the partners did not see the beacon, so it had no contacts to erase), `silent (clock stopped)`, `never read out`, `not read out`, `before first boot` (up to the first sighting by the partners, from there `erased by reboot`), `no data`; column `Eco` for reduced scanning (section 21). On the pieces of a lost-records gap, its evidence (columns `Lost from` … `Readout threshold`, per gap, repeated on each of its pieces; empty elsewhere): own records missing although the partners recorded the beacon: gaps between two readouts of a period, holes inside one readout and gaps at the start of a readout (column `Where`: `between readouts`, `inside a readout` - a readout with `Current Timer` only if its `Contact Count` shows missing contacts -, `start of a readout` - proven by the `Contact Count`, without partner records -, `before the first boot` - recorded by at least 3 partners before the beacon's first boot: erased by a reboot before its first readout with `Current Timer`); lost interval, cause (the `State`: `read out, not logged`, `dropped (storage full)`, `erased by reboot`, or `not recorded (no readout possible)`: a gap between readouts in which no readout was possible — the own records the beacon would have made there, times a factor calibrated on the logged readouts, stay below the smallest `Contact Count` of the readouts logged around it), partner records, readouts before and after, the full gap, `Own records expected`, `Readout threshold` (the readout test, Method 21). The hours of a gap are the sum of its pieces' `Hours` |
 
 `Status`: `ok`; `fake` (BI 3.2.2); `unreliable time (two clocks in one
 period)`; `ID undecided (0-9 / 48-57)`; `invalid: ID2 out of range` /

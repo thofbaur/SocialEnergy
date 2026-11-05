@@ -106,7 +106,6 @@ LOST_COLUMNS = ["Lost from", "Lost to", "Where", "Largest Contact Count", "Partn
                 "Readout after", "During a logger stall", "Gap from", "Gap to", "Gap hours", "Own records expected",
                 "Readout threshold"]     # the evidence of a lost-records gap, in coverage.csv on its pieces
 LOST_VALIDATION_CSV = "lost_records_validation.csv"
-_VALIDATION_ROWS: list = []
 LOST_MARGIN_S = 120     # partner records counted inside a gap only this far from its ends (precision) ...
 LOST_MIN_PARTNER = 10   # ... and at least this many: the beacon was among others, its records are missing
 LOST_EDGE_S = 60        # lost interval: first to last partner sighting in the gap, widened by this (timing precision)
@@ -118,6 +117,9 @@ BEFORE_FIRST_PARTNERS = 3  # ... seen by at least this many partners (not one pa
 START_NEWEST_S = 600    # start of a readout: its newest contact at most this before its real time
 FULL_COUNT = pp.STUDY.storage_full_count   # Contact Count from which the contact flash is full (BI 3.4.2; study.toml)
 DROPPED_FULL, NOT_LOGGED = "dropped (storage full)", "read out, not logged"
+BOTH_CAUSES = "dropped (storage full) and read out, not logged"
+EMPTIED_MARGIN = 1000   # emptied by a readout not logged: the readout after a gap holds this many contacts fewer than
+                        # the one before it left on the beacon (a full flash discards the oldest, its count stays full)
 NOT_RECORDED = "not recorded (no readout possible)"
 RHO_MIN_PARTNERS = 100  # own records per partner record: from a readout's delivered range with at least this many partner records
 THRESHOLD_MARGIN_S = 3600  # readout threshold of a gap: smallest Contact Count of the readouts logged this close to it
@@ -217,7 +219,7 @@ class Model:
         self.periods_of = collections.defaultdict(list)          # beacon -> keys sorted by boot
         for k in sorted(self.boot, key=lambda k: self.boot[k]):
             self.periods_of[k[0]].append(k)
-        self.lost_max, self.lost_min = {}, {}             # set_accounting
+        self.lost_max, self.lost_min, self.left = {}, {}, {}     # set_accounting (left: Contact Count - received)
         # clock stops: key -> [(timer at the stop, shift, silent from, seen again)], sorted by timer
         self.stops = csc.read_stops(output_dir / pp.OUTPUT_QUALITY_DIR / csc.CLOCK_STOPS_CSV)
         # boots moved by the H4 enforcement: key -> |move| [s]
@@ -249,6 +251,8 @@ class Model:
             a = acc[id(item)]
             if a.lost_max is not None:
                 self.lost_max[i], self.lost_min[i] = float(a.lost_max), float(a.lost_min or 0)
+            if a.not_received is not None:
+                self.left[i] = max(a.not_received, 0)
 
     def drift_term(self, beacon: str) -> float:
         """Drift uncertainty of the beacon as a time precision per second of timer (95 %)."""
@@ -415,10 +419,6 @@ def _fakes(output_dir: Path) -> set[tuple[str, int]]:
     path = output_dir / pp.OUTPUT_TIMER_ZERO_DIR / um.FAKES_CSV
     return {(r["Log file"], int(r["Line"])) for r in csv.DictReader(path.open(encoding="utf-8"))} \
         if path.exists() else set()
-
-
-def _contact_key(id2: int, timer: int, rssi: int) -> int:
-    return ((id2 & 0x7FFF) << 40) | ((timer & 0xFFFFFFFF) << 8) | (rssi & 0xFF)
 
 
 def run(log_dir: Path, model_dir: Path, out: Path, valid_span: pp.ValidTimeSpan | None = None,
@@ -627,14 +627,14 @@ def run(log_dir: Path, model_dir: Path, out: Path, valid_span: pp.ValidTimeSpan 
     ok_codes = [code[x] for x in (OK, DUPLICATE) if x in code]
     index = _partner_index(c_id1, c_id2, c_rssi, c_time, c_status, ok_codes)
     seen_of = lambda b: _partner_times(index[0], index[1], b) if str(b).isdigit() else np.zeros(0)
-    lost = lost_records(model, rec_span, rec_times, eco, index, c_id1, c_time, c_status, ok_codes, stalls,
-                        validate_lost)
+    lost, validation = lost_records(model, rec_span, rec_times, eco, index, c_id1, c_time, c_status, ok_codes,
+                                    stalls, validate_lost)
     if validate_lost:
         _write_rows(quality / LOST_VALIDATION_CSV, ["ID", "Period", "Log file", "First line", "End of the readout before",
                                                 "Removed readout real time", "Hours", "Partner records",
                                                 "Detectable", "Found", "Gap start - expected [s]",
                                                 "Gap end - removed readout [s]", "Lost interval end - removed readout [s]",
-                                                "Lost interval end - partners' last sighting [s]"], _VALIDATION_ROWS)
+                                                "Lost interval end - partners' last sighting [s]"], validation)
     by_cause = collections.Counter()
     for x in lost:
         by_cause[(x[8], x[12])] += (x[3] - x[2]) / 3600
@@ -788,7 +788,7 @@ def _partner_index(c_id1, c_id2, c_rssi, c_time, c_status, ok_codes):
 
 
 def lost_records(model: Model, rec_span, rec_times, eco, index, c_id1, c_time, c_status, ok_codes,
-                 stalls, validate: int = 0) -> list[tuple]:
+                 stalls, validate: int = 0) -> tuple[list[tuple], list[list]]:
     """Own records missing although the beacon had contacts. Without a reboot the firmware deletes
     contacts only when the Base confirmed them or when the flash is full (oldest block discarded,
     BI 3.4.2). Within a period, the readouts in log order (with Current
@@ -805,6 +805,10 @@ def lost_records(model: Model, rec_span, rec_times, eco, index, c_id1, c_time, c
     overflow during a pause, 3.2.4 logger not capturing) - unless no readout was possible in the gap
     (_readout_test: the own records the beacon would have made there stay below the readout threshold
     of the time): NOT_RECORDED, the beacon did not record although its partners saw it.
+    BOTH_CAUSES: the readout after the gap holds more than EMPTIED_MARGIN contacts fewer than the
+    one before left on the beacon (Contact Count - received; a full flash keeps its count full, so
+    only a readout not logged emptied it), and the flash was full (DROPPED_FULL) or the contacts
+    left plus the own records expected in the gap (_readout_test) reach FULL_COUNT (NOT_LOGGED).
 
     Holes inside a readout: in the merged timeline of all own contacts of the period, two
     consecutive contacts at least HOLE_MIN_S apart that both lie within one readout's delivered
@@ -824,7 +828,8 @@ def lost_records(model: Model, rec_span, rec_times, eco, index, c_id1, c_time, c
     and the reboot erased its records (ERASED, BEFORE_FIRST): from the partners' first sighting
     (- LOST_EDGE_S) to the first boot.
 
-    Returns (beacon, period, from, to, partner records, readout before, readout after, during a
+    Returns the gaps and the rows of test E (_validate_lost; empty without validate). A gap:
+    (beacon, period, from, to, partner records, readout before, readout after, during a
     logger stall, cause, largest Contact Count, gap from, gap to, where: BETWEEN / INSIDE / START /
     BEFORE_FIRST, own records expected, readout threshold (_readout_test; "" where not run))."""
     id2, t, id1 = index                     # partner records (_partner_index)
@@ -872,9 +877,7 @@ def lost_records(model: Model, rec_span, rec_times, eco, index, c_id1, c_time, c
     for k, readouts in by_period.items():
         out += _inside_holes(model, k, readouts, rec_times, _partner_times(id2, t, k[0]), eco_of[k[0]], stalls)
     out.sort(key=lambda x: (pp.id_sort_key(x[0]), x[2]))
-    if validate:
-        _validate_lost(model, seq, counts, id2, t, validate)
-    return out
+    return out, (_validate_lost(model, seq, counts, id2, t, validate) if validate else [])
 
 
 def _partner_times(id2, t, b):
@@ -1048,6 +1051,14 @@ def _period_gaps(model: Model, k, items, tb, counts_k, stalls, test=None) -> lis
                     verdict, expected, threshold = _readout_test(tb, own, test, end, start, prev_item,
                                                                  (i, start, stop))
                     cause = verdict or cause
+                # both causes: the readout after the gap holds fewer contacts than the one before left on the
+                # beacon - emptied by a readout not logged - and the flash was full (a Contact Count) or the
+                # contacts left plus the own records expected in the gap exceed it
+                left, after_cc = model.left.get(prev_i), r.get("count")
+                if where == BETWEEN and left is not None and after_cc is not None and after_cc < left - EMPTIED_MARGIN:
+                    if cause == DROPPED_FULL or (cause == NOT_LOGGED and expected != ""
+                                                 and left + expected >= FULL_COUNT):
+                        cause = BOTH_CAUSES
                 out.append((b, k, a, z, n, prev, here, " ".join(during), cause, cc, end, start, where,
                             expected, threshold))
         if stop is not None and stop > end:
@@ -1056,13 +1067,13 @@ def _period_gaps(model: Model, k, items, tb, counts_k, stalls, test=None) -> lis
     return out
 
 
-def _validate_lost(model: Model, seq, counts, id2, t, n_cases: int, seed: int = 1) -> None:
+def _validate_lost(model: Model, seq, counts, id2, t, n_cases: int, seed: int = 1) -> list[list]:
     """Synthetic test of the lost-records check (Postprocessing Method.md 21): a complete readout with
     Current Timer, between two others of its period, is treated as not logged. Expected: a gap from
     the end of the readout before it to the oldest contact of the one after it, which covers the
     removed readout's records. Only cases without a gap there before; detectable if the partners
     recorded the beacon at least LOST_MIN_PARTNER times in the removed stretch (end of the readout
-    before .. removed readout's real time). Written to LOST_VALIDATION_CSV in the output directory."""
+    before .. removed readout's real time). Returns the rows of LOST_VALIDATION_CSV (written by run)."""
     rng = random.Random(seed)
     cases = []
     for k, items in seq.items():
@@ -1113,7 +1124,7 @@ def _validate_lost(model: Model, seq, counts, id2, t, n_cases: int, seed: int = 
           f"{np.median(lost_err):.0f} s, 10 / 90 % {q(lost_err, 0.1):.0f} / {q(lost_err, 0.9):.0f} s; lost interval "
           f"end - partners' last sighting before the readout: 10 / 50 / 90 % {q(seen_err, 0.1):.0f} / "
           f"{q(seen_err, 0.5):.0f} / {q(seen_err, 0.9):.0f} s")
-    _VALIDATION_ROWS[:] = rows
+    return rows
 
 
 def coverage(model: Model, last_real, delivered, eco, model_dir: Path, lo: float, hi: float, lost=(),
@@ -1138,6 +1149,8 @@ def coverage(model: Model, last_real, delivered, eco, model_dir: Path, lo: float
                         recorded the beacon, with full contact flash (lost_records): oldest discarded
     read out, not logged
                         the same without full storage: read out by the Base and not logged
+    dropped (storage full) and read out, not logged
+                        both: the flash ran full and a readout not logged emptied it (lost_records)
     not recorded (no readout possible)
                         the same, but no readout was possible in it (lost_records, _readout_test):
                         the beacon did not record although its partners saw it

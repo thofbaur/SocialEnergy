@@ -33,7 +33,8 @@ Written into --data-dir (default Output/data):
                                   no time; kind (contact / self-report / eco session), log file,
                                   line, timer and reason
 - coverage.csv                    per beacon, intervals over the whole data: recorded, erased by
-                                  reboot, read out not logged, dropped (storage full), not recorded
+                                  reboot, read out not logged, dropped (storage full), both of
+                                  them, not recorded
                                   (no readout possible), not seen (off or alone), silent (clock
                                   stopped), never read out, not read out, before first boot, no data;
                                   column Eco; on the pieces of a gap with own records missing

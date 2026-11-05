@@ -263,8 +263,8 @@ z_observed(n) = line time − Current Timer
 
 - `z_true`: boot time of the uptime period;
 - `drift`: the beacon clock runs fast, so the timer-zero time moves earlier
-  with uptime; common value −21 s per day of uptime (measured, `ToDo.md`
-  task 21);
+  with uptime; common value −21 s per day of uptime (measured, task 21 of the
+  firmware ToDo, `BeaconNRF54/ToDo.md`);
 - `delay(n) ≥ 0`: the line can only be stamped late (BI 3.6).
 
 The drift-corrected timer-zero time `z_observed − drift × Current Timer` is
@@ -806,7 +806,8 @@ The validation now moves the bounds from readouts without `Current Timer`
 with an injected reboot (otherwise they forced impossible solutions).
 
 **Tested and switched off: the partners' records as boot evidence for all
-readouts** (`USE_RECORD_EVIDENCE`, 2026-10-20). For readouts with `Current
+readouts** (`USE_RECORD_EVIDENCE`, 2026-10-20; the code was removed on
+2026-11-05, entry of that day in section 20). For readouts with `Current
 Timer` but without a reliable boot from encounter edges, the boot from the
 partners' records (the match used for the readouts without `Current Timer`,
 strict: peak ≤ 2 min wide, ratio 1.3, ≥ 30 matches, 4 × background) was
@@ -1506,7 +1507,8 @@ rebooted at 00:30 before its next readout (its records of the evening were
 erased), 88 (21:01–21:53, one minute after 15) rebooted the next morning —
 neither can be checked; 85 rebooted during its gap (a reset); 6, 7, 13, 46,
 61, 64, 103 kept their clock (later readouts on the old boot with normal
-delays). Firmware analysis, errata and hypotheses: ToDo 24 (with ToDo 21).
+delays). Firmware analysis, errata and hypotheses: ToDo 24 (with ToDo 21), both in
+the firmware ToDo (`BeaconNRF54/ToDo.md`).
 
 **Handling (`timer_step_check.py`, run after `uptime_model.py`).** The test
 above as a general check: contacts of each readout in 4-h blocks of their
@@ -2114,6 +2116,95 @@ Both-sides check: edges move from delay-free (26 874 → 12 263, within 30 s
 70.0 → 69.5 %) to contacts (176 145 → 189 374, 67.9 → 68.1 %) and log order
 (3 072 → 4 454, 58.1 → 60.8 %): the moved edges behave as their new class.
 
+**Review of the code (2026-11-04).** Two module states were left despite the
+entry "Delay bound and module state" above: the eco sessions of the uptime
+model (now `eco` of `uptime_model.contact_boots`, filled by `read_contacts`
+in the fit; `timer_step_check.py` passed none, as before; since
+2026-11-05 it passes them, entry of that day) and the rows of
+test E of the dating (now returned by `model_dating.lost_records`). Removed:
+the unused `model_dating._contact_key`. `h4_enforce.py` deletes
+`quality/h4_enforce.csv` when its linear programme finds no solution (before,
+a list from an earlier run stayed and gave the dating its moves).
+Docstrings of `both_sides_check.py` (the class is read from the record's
+precision) and `hard_rule_check.py` (which list of fake records) corrected.
+Full run with `--reports` (1 051 s): all 189 files byte-identical to the run
+before. Tests: 29.
+
+**Limits for other studies (2026-11-04).** Docstrings of `base_mislabel_check`,
+`id_split_analysis`, `contact_sync_analysis`, `hard_rule_check` and
+`timer_zero_analysis` named DSA2026 values (ID-bug end, Base fix, delay-free
+time, flash start, common drift); they now name the `study.toml` keys. Cases
+DSA2026 does not have, handled now:
+- contact sync without any pair (`solve`: nothing corrected), without a
+  delay-free readout of a synced unit (the median of nothing made every shift
+  NaN; now the level of the timer-zero analysis is kept, with a message) and
+  without a beacon of low noise on both day halves (the drift fit gave NaN;
+  now every beacon gets the common drift, with a message); the printed
+  summaries no longer fail on empty arrays;
+- ID pair keys (`contact_sync_analysis.transitions`, `clock_stop_check`,
+  `uptime_model` co-presence and fit) assumed IDs below 1000 or 1024; the
+  base is now the largest ID + 1 of the data (same key order);
+- the duplicate check never compared files under 64 KiB (no head digest).
+  Such a file is now compared with every file that starts with the same
+  line; the cache stores the SHA-256 of the first line (`logcache.VERSION`
+  5, all caches rebuilt once). DSA2026: 6 files under 64 KiB, none a copy.
+Full run with `--reports` (1 252 s, 130 s of it the cache): all 189 files
+byte-identical. Tests: 33 (`test_study_limits.py`: small duplicates, IDs above
+999, no pairs). The base check's three "check" readouts (16) are single
+`Transfer complete` lines: no contacts, no self-reports.
+
+**Validation cache, record evidence removed, ToDo split (2026-11-05).**
+`validate_model.py` reused `uptime_model_validation_state.pkl` without a check;
+the state now holds a digest of `uptime_model_periods.csv`,
+`uptime_model_readouts.csv` and `uptime_model.py` and is fitted again when one
+changed (the cache of the earlier runs had none: fitted again once, 8 min;
+the next run took the cache, same results). The option `USE_RECORD_EVIDENCE`
+(switched off since 2026-10-20, section 19) is removed with
+`record_evidence`, its constants and its two always empty columns of
+`uptime_model_readouts.csv` (`Boot from the partners' records`, `Records
+peak`; read by nothing). Full run with `--reports` (1 391 s): 188 of 189
+files byte-identical, `uptime_model_readouts.csv` the same apart from the two
+columns. `ToDo.md` split: the postprocessing and evaluation points in
+`SocialEnergyPrivate/ToDo.md`, logger and firmware (1, 21–24, 28) stay in
+`BeaconNRF54/ToDo.md`; the numbers are kept, new: 51 (end-to-end test), 52
+(eco sessions in `timer_step_check.py`); 13, 17, 20 and 27 marked done
+(nothing left for the postprocessing).
+
+**Gaps with both causes, regression test (2026-11-05).** A gap between
+readouts named one cause: `dropped (storage full)` if a `Contact Count` of the
+readouts around it reached 215 000, else `read out, not logged`. Room 118
+(ToDo 29) had both: full on 2026-08-21, 183 427 contacts left on the beacon
+after its last logged readout that day, 502 at the next logged readout
+(2026-08-29). A full flash discards its oldest blocks but its count stays
+full, so a count that falls below what was left needs a readout that was not
+logged. New state `dropped (storage full) and read out, not logged`
+(`model_dating.BOTH_CAUSES`): the readout after the gap holds more than 1 000
+(`EMPTIED_MARGIN`) contacts fewer than the one before left (`Contact Count`
+− received), and the flash was full (a count ≥ 215 000) or the contacts left
+plus the own records expected in the gap (readout test) reach 215 000. 9 gaps,
+800 h, all location tags (117, 118, 121, 123, 124, 127, 131, 134 from `read
+out, not logged`, 150 from `dropped (storage full)`); 155 (full, then 0
+contacts) not decidable: the readout after has no `Contact Count`. Only
+`data/coverage.csv` changed (same rows; checked with the new regression
+test). The slides show the new state. ToDo 45 (boots jitter by a few seconds)
+accepted as it is. ToDo 51: a local end-to-end regression test,
+`Postprocessing/regression/regression_test.py` (not in the repository,
+`.git/info/exclude`): `save` stores the SHA-256 of every output file (and for
+CSV files header and line count) as the baseline, `check` compares, `run`
+runs the tests and `run_pipeline.py --reports` first (`Output/presentation/` of the
+slides is not compared).
+
+**Eco sessions in the timer step check (2026-11-05, ToDo 52).**
+`timer_step_check.py` matched its timer blocks (section 19.2) with all own
+records, also those made during the beacon's eco sessions (one scan per
+300 s, no edge evidence), unlike the uptime model. It now reads the sessions
+with `read_contacts` and gives each block those of its readout. Regression
+test: only `quality/timer_step_check.csv` changed; the one step found (15
+p2, 8 550 s, explained by its clock stops) stays, its later clock now taken
+from the block at timer 68 150 – 82 550 s (peaks 148 / 79, before
+82 550 – 96 950 s, 88 / 37); `unreliable_time_records.csv` and all data
+unchanged.
+
 ### 21. Dating the records with the uptime model (`model_dating.py`, `generate_output.py`)
 
 `generate_output.py` dates every record with the uptime model (the previous
@@ -2249,9 +2340,10 @@ the matches). Result (all days):
 
 Final run 2026-10-26 (symmetric delay cost, co-presence, log-order class
 for persons), 207 410 matched edges. The class is read from the
-precision of A's record (the best class of its period plus the drift term),
-so a record far from its period's `Current Timer` can count in the next
-class. Before (2026-10-21, classes 48 / 16 / 90 s): reliable contact boots
+precision of A's record (the best class of its period plus the drift term;
+since 2026-11-04 the best over the period's readouts of their class plus
+the drift term from each, section 20 entry of that day), so a record far
+from its period's `Current Timer` can count in the next class. Before (2026-10-21, classes 48 / 16 / 90 s): reliable contact boots
 200 084 edges, 68 %; delay-free 1 909, median +10 s, 61 %; delay only 5 093,
 median +10 s, 56 %. Edge noise is about 20 s (10-s bins, a 7-s scan on each
 side). Median offset per beacon (≥ 30 edges): no beacon beyond 30 s (before:
@@ -2302,6 +2394,7 @@ data":
 | `no data` | beacon in `list_persons.csv` / `list_rooms.csv` without any uptime period | none |
 | `dropped (storage full)` | within a period: a gap between consecutive readouts in which the partners recorded the beacon, with full contact flash (lost records) | discarded by the beacon (oldest blocks) |
 | `read out, not logged` | the same without full storage | read out by the Base, not logged: lost |
+| `dropped (storage full) and read out, not logged` | the same, both causes (since 2026-11-05, section 20): the flash ran full and a readout not logged emptied it | both |
 | `not recorded (no readout possible)` | the same, but no readout of the beacon was possible in the gap (readout test, below) | none: the beacon did not record although its partners saw it |
 | `silent (clock stopped)` | a clock stop (19.3): the beacon's last sighting before it to its first after it | none: the beacon neither recorded nor was seen |
 
@@ -2419,8 +2512,8 @@ delay of 7–43 min). Examples: 147, no readout with data logged between
 2026-08-22 10:53 (same period, 354 339 partner records in the gap); room
 118: full until 2026-08-15 (3 gaps "storage full"), then 184 747 contacts on
 2026-08-21 19:51 and 502 on 2026-08-29 21:50 in the same period — emptied by
-readouts not logged (the flash ran full again in between; the rule names the
-last cause only). Columns: ID, period, from, to, hours, cause, largest
+readouts not logged (the flash ran full again in between; the rule named the
+last cause only; since 2026-11-05 both, entry of that day in section 20). Columns: ID, period, from, to, hours, cause, largest
 `Contact Count`, partner records, readout before and after (file:line),
 during a logger stall. A first attempt marked every
 period spanning a stall from its last readout before to the next one after;

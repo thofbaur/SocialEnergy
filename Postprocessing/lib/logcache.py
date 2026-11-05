@@ -16,8 +16,8 @@ The cache holds every line: the lines postprocessing.parse_line reads (those wit
 an ID field), contact lines as numbers and all other lines as text, and the lines it skips
 (notes written into the working copies; text) by line number, and the text of the contact lines
 not written as contact_text (RSSI 0 is logged as "-0"). The file can be rebuilt from it
-byte for byte (file_bytes). Also: the SHA-256 of the file and of its first HEAD_BYTES (duplicate
-check, in a small .json beside the cache file, meta) and the fake contact records as
+byte for byte (file_bytes). Also: the SHA-256 of the file, of its first HEAD_BYTES and of its first
+line (duplicate check, in a small .json beside the cache file, meta) and the fake contact records as
 uptime_model.py finds them while reading (runs of consecutive contact lines of one ID1,
 postprocessing.embedded_messages).
 
@@ -50,7 +50,7 @@ import numpy as np
 from lib import logger_protocol
 from lib import postprocessing as pp
 
-VERSION = 4                   # of the cache content; a new version makes all cache files stale
+VERSION = 5                   # of the cache content; a new version makes all cache files stale
 CACHE_ENV = "DSA_CACHE_DIR"   # the cache root for the scripts a script starts (set_root)
 CACHE_SUBDIR = "cache"        # the cache root in the pipeline folder
 HEAD_BYTES = 1 << 16          # duplicate check: digest of the first bytes (postprocessing.find_duplicate_log_files)
@@ -233,7 +233,8 @@ def _split_lines(name: str, content: bytes) -> tuple[list[str], str]:
 
 def _digests(content: bytes) -> dict:
     return dict(size=len(content), sha256=hashlib.sha256(content).hexdigest(),
-                head=hashlib.sha256(content[:HEAD_BYTES]).hexdigest())
+                head=hashlib.sha256(content[:HEAD_BYTES]).hexdigest(),
+                first_line=hashlib.sha256(content[:content.find(b"\n") + 1 or len(content)]).hexdigest())
 
 
 def _build(path: Path) -> dict:
@@ -256,7 +257,7 @@ def store(path: Path, data: dict) -> None:
         if old not in (target, target.with_suffix(".json")):
             old.unlink(missing_ok=True)
     tmp = target.with_name(f"{target.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps({k: data[k] for k in ("size", "sha256", "head", "n_lines", "recipe", "relabelled")
+    tmp.write_text(json.dumps({k: data[k] for k in ("size", "sha256", "head", "first_line", "n_lines", "recipe", "relabelled")
                                if k in data}), encoding="utf-8")
     os.replace(tmp, target.with_suffix(".json"))
     with tmp.open("wb") as f:
@@ -287,7 +288,8 @@ def read(path: Path) -> dict:
 
 
 def meta(path: Path) -> dict:
-    """size, sha256, head (SHA-256 of the first HEAD_BYTES) and n_lines of a log file."""
+    """size, sha256, head (SHA-256 of the first HEAD_BYTES), first_line (SHA-256 of the first line)
+    and n_lines of a log file."""
     target = meta_file(path)
     if not target.exists():
         _write(path)
@@ -345,7 +347,8 @@ def file_digest(path: Path, limit: int | None = None) -> str:
 def find_duplicate_log_files(paths: list[Path]) -> list[tuple[str, list[Path]]]:
     """postprocessing.find_duplicate_log_files from the cache."""
     ensure(paths)
-    return pp.find_duplicate_log_files(paths, HEAD_BYTES, digest=file_digest)
+    return pp.find_duplicate_log_files(paths, HEAD_BYTES, digest=file_digest,
+                                       first_line=lambda path: meta(path)["first_line"])
 
 
 def recipe(source: Path, relabel: dict[int, tuple[str, str]], replace: dict[int, str]) -> str:

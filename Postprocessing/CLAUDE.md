@@ -60,9 +60,11 @@ dort, nicht im Code.
 - **Ablauf einer Änderung:** vorschlagen -> umsetzen -> Pipeline neu laufen
   lassen -> Ausgaben per SHA-256 mit dem Stand davor vergleichen (jede
   Abweichung erklärt oder gewollt; `uptime_model_validation_state.pkl` ändert
-  sich durch `validate_model.py --refit`) -> Doku nachziehen:
+  sich, wenn `validate_model.py` neu fittet: nach einem neuen Modell der
+  Pipeline, einer Änderung von `uptime_model.py` oder mit `--refit`) -> Doku nachziehen:
   `Postprocessing Method.md` (datiertes Protokoll, Messwerte nur dort),
-  `POSTPROCESSING.md`, `../ToDo.md`, diese Datei.
+  `POSTPROCESSING.md`, `../ToDo.md` (nur Postprocessing und Auswertung;
+  Logger und Firmware in `BeaconNRF54/ToDo.md`), diese Datei.
 - **Warnungen beachten:** `run_pipeline.py` meldet Reboot-Hinweise, die erst
   Runde 2 findet (eine dritte Runde gibt es nicht), `uptime_model.py` eine
   Iteration ohne Konvergenz der Schnittpunkte und Verzögerungen nahe

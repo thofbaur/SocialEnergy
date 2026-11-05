@@ -12,8 +12,9 @@ For a readout r of beacon b in period k:
     T(e) = B_k + t_e (1 + d_b)        real time of a record e with timer t_e
     eps  = TOL_S + TOL_PER_DAY_S * uptime in days    (rounding, precision of the boots, drift uncertainty)
 
-Fake contact records (BI 3.2.2, quality/fake_records.csv) are not checked: their timers are bytes
-of other messages.
+Fake contact records (BI 3.2.2; read_fakes: timer_zero/uptime_model_fake_records.csv of the same
+run, else quality/fake_records.csv of data_quality_reports.py) are not checked: their timers are
+bytes of other messages.
 
 H1  Nothing is logged before it happens: R_r <= line time of its Current Timer + eps, and
     T(e) <= line time of e + eps for every contact of the readout (BI 2.6, 3.6).
@@ -29,13 +30,14 @@ H4  Readouts happen in log order, across all beacons: one Base, one connection a
     period: all its readouts outside (its boot is shifted) or only some (it probably mixes two
     boots).
 H5  A new boot lies after the real time of the previous period's last readout (- eps).
-H6  Delay-free readouts (first readout of a log file, readouts after 2026-08-29 19:30) are
-    logged at their real time: line time - R_r within [-eps, eps + ANCHOR_MARGIN_S] (BI 3.2.3).
+H6  Delay-free readouts (first readout of a log file, readouts from study.toml [times]
+    delay_free_from on) are logged at their real time: line time - R_r within
+    [-eps, eps + ANCHOR_MARGIN_S] (BI 3.2.3).
 H7  A documented battery replacement has a boot in its window (battery_replacement_check.py);
     a period without readout counts (verdict "change without a readout").
 H8  Uptime starts at the boot: covered by H1 for the contacts (their timers lie at most the
     readout duration above Current Timer).
-H9  No boot before the beacons were flashed (postprocessing.FLASH_START, 2026-08-12 23:00).
+H9  No boot before the beacons were flashed (postprocessing.FLASH_START, study.toml [times] flash_start).
 
 Output (quality/ subfolder of --output-dir):
 - hard_rule_check.csv   one row per violation: rule, beacon, period, readout (file, line, line

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Split the ID1 values 0-9 of the original logs into the real IDs 0-9 and 48-57.
 
-Until 2026-08-15 22:00 the logger wrote ID1 48-57 as 0-9 (Background Information 3.2.1).
+Until study.toml [id_bug] until the logger wrote ID1 48-57 as 0-9 (Background Information 3.2.1).
 Every readout logged under ID1 d (0-9) before that time is either beacon d or beacon
 d + 48. ID2 is always correct, and so is every ID1 after the cutoff.
 

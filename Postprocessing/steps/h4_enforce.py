@@ -183,7 +183,9 @@ def main(argv: list[str]) -> int:
     mat, b = A.matrix(nv)
     res = linprog(cost, A_ub=mat, b_ub=b, bounds=bounds, method="highs")
     if res.status != 0:
-        print(f"H4 enforcement: no solution ({res.message}); model unchanged")
+        # no list of this run: one left from an earlier run would give the dating its moves
+        (quality / OUT_CSV).unlink(missing_ok=True)
+        print(f"H4 enforcement: no solution ({res.message}); model unchanged, no {OUT_CSV}")
         return 0
     move, dg, slack = res.x[X:X + n], res.x[G:G + n], res.x[S:]
     new_boot = {k: boot[k] + move[col[k]] for k in keys}

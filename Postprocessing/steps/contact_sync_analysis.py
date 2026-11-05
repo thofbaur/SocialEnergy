@@ -28,7 +28,7 @@ Steps (Postprocessing Method.md, section 14):
    against wrong pairs), then Huber least squares on the pairs within 10 min.
    A unit counts as synced with >= 2 pairs within 2 min and >= 50 % agreement.
 5. Absolute level: median over the delay-free readouts (first readout of a log file,
-   readouts after 2026-08-29 19:30) of the synced units.
+   readouts from study.toml [times] delay_free_from on) of the synced units.
 6. Units without enough pairs: all transitions against all synced partners in one
    histogram (+-8 h); accepted with >= 8 matches from >= 2 partners.
 7. Drift per beacon: the transitions of all aligned units are matched one by one
@@ -190,9 +190,10 @@ def transitions(zero: np.ndarray, drift: np.ndarray, u: np.ndarray, b2: np.ndarr
     """(unit, partner) -> (encounter starts, encounter ends, first bin, last bin) in real time [s]."""
     T = zero[u] + t * (1 + drift[u])
     binidx = np.floor(T / BIN_S).astype(np.int64)
-    key = u * 1000 + b2
-    if not len(key):
+    if not len(u):
         return {}
+    base = int(b2.max()) + 1                                    # key = unit * base + partner
+    key = u * base + b2
     lo = int(binidx.min())
     if int(binidx.max()) - lo < 1 << 32 and 0 <= int(key.min()) and int(key.max()) < 1 << 31:
         both = np.unique((key << 32) | (binidx - lo))          # sorted by (pair, bin), each bin once
@@ -211,7 +212,7 @@ def transitions(zero: np.ndarray, drift: np.ndarray, u: np.ndarray, b2: np.ndarr
         if b == a:
             continue
         s, e = bounds[group[a]], bounds[group[a] + 1]
-        events[(int(key[s] // 1000), int(key[s] % 1000))] = (
+        events[(int(key[s] // base), int(key[s] % base))] = (
             starts[a:b], ends[a:b], binidx[s] * float(BIN_S), binidx[e - 1] * float(BIN_S))
     return events
 
@@ -268,6 +269,8 @@ def pair_offsets(units: Units, events: dict, centre: np.ndarray | None) -> list[
 
 def solve(n: int, edges: list[tuple]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Corrections c (c_v - c_u = offset), weighted agreement share and number of agreeing pairs."""
+    if not edges:           # no pairs (few contacts): nothing corrected, no unit synced by pairs
+        return np.zeros(n), np.zeros(n), np.zeros(n, dtype=np.int64)
     neighbours = collections.defaultdict(list)
     for a, b, d, w in edges:
         w = min(w, WEIGHT_CAP)
@@ -443,13 +446,19 @@ class DriftFit:
             info_half.append(_info(Mh, group, ng, n))
         (de, do), (ie, io) = half, info_half
         both = (ie > 0) & (io > 0)
-        self.k = float(np.median(np.abs(de - do)[both] / np.sqrt(1 / ie[both] + 1 / io[both])) / 0.6745)
+        # no beacon with matches on both day halves: noise unknown, every raw drift counts as noise
+        self.k = float(np.median(np.abs(de - do)[both] / np.sqrt(1 / ie[both] + 1 / io[both])) / 0.6745) \
+            if both.any() else np.inf
         good = both & (self.k / np.sqrt(np.maximum(ie, 1e-12)) < DRIFT_GOOD_NOISE) & \
             (self.k / np.sqrt(np.maximum(io, 1e-12)) < DRIFT_GOOD_NOISE)
-        cov = np.mean((de[good] - np.median(de[good])) * (do[good] - np.median(do[good])))
-        self.tau = float(np.sqrt(max(cov, 0.0)))
-        self.centre = float(np.median(np.r_[de[good], do[good]]))
         self.n_good = int(good.sum())
+        if self.n_good:
+            cov = np.mean((de[good] - np.median(de[good])) * (do[good] - np.median(do[good])))
+            self.tau = float(np.sqrt(max(cov, 0.0)))
+            self.centre = float(np.median(np.r_[de[good], do[good]]))
+        else:       # spread not measurable (few contacts): reliability 0, every beacon the common drift
+            print("  drift per beacon: no beacon with low noise on both day halves; all get the common drift")
+            self.tau, self.centre = 0.0, d0 * pp.DAY_S
         # shrinkage
         self.info = _info(M, group, ng, n)
         self.matches = np.bincount(group[np.r_[M[0], M[1]]], minlength=ng)
@@ -536,13 +545,13 @@ def run_model_periods(lines: logcache.Lines, out_dir: Path, hints: bool = True) 
     write_drift(out_dir / DRIFT_CSV, fit)
     a = fit.res_anchors
     dr = fit.drift_beacon[fit.matches > 0]
-    p5, p50, p95 = np.percentile(dr, [5, 50, 95])
+    p5, p50, p95 = _pct(dr, [5, 50, 95])
     print(f"  drift per beacon: {int((fit.matches > 0).sum())} beacons, {fit.n_matches} matches; true spread "
           f"{fit.tau:.2f} s/day ({fit.n_good} beacons) around {fit.centre:.2f}; reliability > 0.8: "
           f"{int(((fit.matches > 0) & (fit.reliability > 0.8)).sum())}")
     print(f"  drift [s/day] 5/50/95 %: {p5:.1f} / {p50:.1f} / {p95:.1f}; match residual median "
-          f"{np.median(np.abs(fit.res)):.1f} s; delay-free readouts {len(a)}, median |residual| "
-          f"{np.median(np.abs(a)):.1f} s")
+          f"{_pct(np.abs(fit.res), 50):.1f} s; delay-free readouts {len(a)}, median |residual| "
+          f"{_pct(np.abs(a), 50):.1f} s")
     print(f"  written to {out_dir / DRIFT_CSV}")
 
 
@@ -575,7 +584,11 @@ def run(lines: logcache.Lines, out_dir: Path, hints: bool = True) -> None:
         k = units.index[(r.beacon_id, r.period)]
         if synced[k]:
             anchors.append(r.corrected_zero().timestamp() - (units.zero0[k] + c2[k]))
-    level = float(np.median(anchors))
+    if anchors:
+        level = float(np.median(anchors))
+    else:       # the median of nothing would make every shift NaN
+        level = 0.0
+        print("  no delay-free readout of a synced unit: the level of the timer-zero analysis is kept")
     shift = np.where(synced, c2 + level, 0.0)
     method = ["pairs" if synced[k] else "" for k in range(units.n)]
     detail = [""] * units.n
@@ -677,6 +690,11 @@ def reboot_hints(units: Units, readouts, own, zero_fit, drift, status, path: Pat
     return len(rows)
 
 
+def _pct(a, q):
+    """Percentile(s) q of a for the printed summary; NaN for an empty a (np.percentile raises)."""
+    return np.percentile(a, q) if len(a) else (np.full(len(q), np.nan) if np.ndim(q) else np.nan)
+
+
 def _fmt(ts: float) -> str:
     return datetime.fromtimestamp(ts).strftime(pp.TIMESTAMP_FORMAT)
 
@@ -721,16 +739,16 @@ def summary(units: Units, readouts, shift, applied, method, status, fit: DriftFi
           f"conflicts {sum(status[k].startswith('conflict') for k in per)}")
     sh = -shift[[k for k in per if applied[k]]]
     print("  zero earlier by > 60 s: %d, > 10 min: %d, > 1 h: %d (median %.0f s, max %.0f s)" % (
-        (sh > 60).sum(), (sh > 600).sum(), (sh > 3600).sum(), np.median(sh), sh.max()))
+        (sh > 60).sum(), (sh > 600).sum(), (sh > 3600).sum(), _pct(sh, 50), _pct(sh, 100)))
     a = fit.res_anchors
     print(f"  drift per beacon: {int((fit.matches > 0).sum())} beacons, {fit.n_matches} matches; noise "
           f"{fit.k:.1f} / sqrt(info), true spread {fit.tau:.2f} s/day ({fit.n_good} beacons) around {fit.centre:.2f}; "
           f"reliability > 0.8: {int(((fit.matches > 0) & (fit.reliability > 0.8)).sum())}")
     dr = fit.drift_beacon[fit.matches > 0]
     print("  drift [s/day] 5/50/95 %%: %.1f / %.1f / %.1f; match residual median %.1f s (common drift %.1f s)" % (
-        *np.percentile(dr, [5, 50, 95]), np.median(np.abs(fit.res)), np.median(np.abs(fit.common_res))))
+        *_pct(dr, [5, 50, 95]), _pct(np.abs(fit.res), 50), _pct(np.abs(fit.common_res), 50)))
     print(f"  delay-free readouts: {len(a)}, within +-30 s: {int((np.abs(a) <= 30).sum())}, median |residual| "
-          f"{np.median(np.abs(a)):.1f} s (common drift {np.median(np.abs(fit.common_res_anchors)):.1f} s)")
+          f"{_pct(np.abs(a), 50):.1f} s (common drift {_pct(np.abs(fit.common_res_anchors), 50):.1f} s)")
     print(f"  header-less readouts without zero time: {len(hl)}, now with zero time: {int(sum(applied[k] for k in hl))}")
 
 

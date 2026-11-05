@@ -7,8 +7,8 @@ Model (Background Information.md, 2.5, 3.4.3, 3.6), per readout n:
                   = z0  +  DRIFT * uptime(n)  +  L(n)  +  rounding
 
 - z0: true boot time of the uptime period,
-- DRIFT: clock drift of the beacons, measured -21 s per day of uptime
-  (the beacon clock runs fast, so the timer-zero time moves earlier),
+- DRIFT: clock drift of the beacons per day of uptime (study.toml [beacon]
+  drift_common_s_per_day; the beacon clock runs fast, so the timer-zero time moves earlier),
 - L(n) >= 0: logging delay of the readout's Current Timer line (only later).
 
 Steps:

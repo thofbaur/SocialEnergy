@@ -440,8 +440,14 @@ def _file_digest(path: Path, limit: Optional[int] = None, chunk_size: int = 1 <<
     return digest.hexdigest()
 
 
-def find_duplicate_log_files(log_paths: list[Path], head_bytes: int = 1 << 16,
-                             digest=_file_digest) -> list[tuple[str, list[Path]]]:
+def _first_line_digest(path: Path) -> str:
+    """SHA-256 of the file's first line, its line end included."""
+    with path.open("rb") as handle:
+        return hashlib.sha256(handle.readline()).hexdigest()
+
+
+def find_duplicate_log_files(log_paths: list[Path], head_bytes: int = 1 << 16, digest=_file_digest,
+                             first_line=_first_line_digest) -> list[tuple[str, list[Path]]]:
     """Find log files whose content is contained in another log file.
 
     Returns a list of (kind, files):
@@ -451,7 +457,8 @@ def find_duplicate_log_files(log_paths: list[Path], head_bytes: int = 1 << 16,
       while the logger was still writing).
 
     Every line of such files would be processed more than once. digest(path, limit): SHA-256 of
-    the file or of its first limit bytes (logcache.find_duplicate_log_files: from the cache).
+    the file or of its first limit bytes, first_line(path): SHA-256 of its first line
+    (logcache.find_duplicate_log_files: both from the cache).
     """
     sizes = {path: path.stat().st_size for path in log_paths}
     heads = {path: digest(path, head_bytes) for path in log_paths}
@@ -478,6 +485,17 @@ def find_duplicate_log_files(log_paths: list[Path], head_bytes: int = 1 << 16,
             shorter_digest = digest(shorter)
             for longer in files[index + 1:]:
                 if sizes[longer] > sizes[shorter] and digest(longer, sizes[shorter]) == shorter_digest:
+                    findings.append(("copy of the beginning", [shorter, longer]))
+    # A file shorter than head_bytes has no head digest; it can only be the beginning of a file
+    # that starts with the same line, only those are read up to its size.
+    small = [path for path in unique if 0 < sizes[path] < head_bytes]
+    if small:
+        firsts = {path: first_line(path) for path in unique}
+        for shorter in sorted(small, key=lambda path: sizes[path]):
+            shorter_digest = digest(shorter)
+            for longer in sorted(unique, key=lambda path: sizes[path]):
+                if sizes[longer] > sizes[shorter] and firsts[longer] == firsts[shorter] \
+                        and digest(longer, sizes[shorter]) == shorter_digest:
                     findings.append(("copy of the beginning", [shorter, longer]))
     return findings
 

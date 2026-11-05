@@ -27,7 +27,8 @@ D  Readouts without Current Timer (--headerless N, needs a full fit): per round 
    the only readout of its period (the truth is none of the two candidates). The boots stay those of
    the fit, which used the readout's own evidence (leaks in, strongest for short periods).
 
-The fitted state is cached in timer_zero/uptime_model_validation_state.pkl (--refit to redo it).
+The fitted state is cached in timer_zero/uptime_model_validation_state.pkl, with the digest of the
+pipeline's model and of uptime_model.py (fingerprint); fitted again when they changed or with --refit.
 Output: timer_zero/uptime_model_validation.csv (one row per test case) and a summary.
 """
 
@@ -37,11 +38,13 @@ import argparse
 import collections
 import copy
 import csv
+import hashlib
 import math
 import pickle
 import random
 import sys
 import time
+from pathlib import Path
 
 import numpy as np
 
@@ -57,13 +60,27 @@ LATE_S = (600, 3600, 8 * 3600)
 MARGIN_S = 30                      # injected reboot at least this far from both readouts
 
 
+def fingerprint(args) -> str:
+    """What the cached fit stands for: the pipeline's model (periods and readouts of the uptime model)
+    and the code of the uptime model. Another run of the pipeline or a change of the code: fitted again."""
+    tz_dir = args.output_dir / pp.OUTPUT_TIMER_ZERO_DIR
+    digest = hashlib.sha256()
+    for path in (tz_dir / um.PERIODS_CSV, tz_dir / um.READOUTS_CSV, Path(um.__file__)):
+        digest.update(path.read_bytes() if path.exists() else b"missing")
+    return digest.hexdigest()
+
+
 def load_state(args):
     path = args.output_dir / pp.OUTPUT_TIMER_ZERO_DIR / STATE_PKL
+    key = fingerprint(args)
     if path.exists() and not args.refit:
         with path.open("rb") as f:
-            return pickle.load(f)
+            state = pickle.load(f)
+        if state.get("fingerprint") == key:
+            return state
+        print(f"{path.name}: made from another pipeline output or uptime model; fitting again")
     st = um.fit(args)
-    state = dict(beacons=st.beacons, inputs=st.inputs, boots=st.boots, segments=st.segments)
+    state = dict(beacons=st.beacons, inputs=st.inputs, boots=st.boots, segments=st.segments, fingerprint=key)
     with path.open("wb") as f:
         pickle.dump(state, f)
     return state

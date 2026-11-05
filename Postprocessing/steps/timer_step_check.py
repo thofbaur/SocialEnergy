@@ -10,7 +10,8 @@ after uptime_model.py):
 
 1. Its contacts are cut into blocks of BLOCK_S of their own timer (at least MIN_BLOCK_CONTACTS
    each); every block is matched against the partners' records like a whole readout
-   (uptime_model.contact_boots) and gives a boot with peak and second peak.
+   (uptime_model.contact_boots, without the beacon's own records during its eco sessions) and
+   gives a boot with peak and second peak.
 2. A step: two consecutive reliable blocks (peak >= MIN_PEAK, peak >= MIN_RATIO x second peak)
    whose boots differ by more than STEP_MIN_S.
 3. Accepted only if the earlier clock is the period's (its boot within STEP_MIN_S of the period's
@@ -73,8 +74,10 @@ def _reliable(c) -> bool:
     return um.contact_reliable(c)
 
 
-def block_boots(readouts, assign, boots, drift_of, rd, b2, tm, targets, block_s, min_contacts):
-    """Boots of the timer blocks of each target readout: readout -> [(timer from, to, boot, peak, second)]."""
+def block_boots(readouts, assign, boots, drift_of, rd, b2, tm, targets, block_s, min_contacts, eco=()):
+    """Boots of the timer blocks of each target readout: readout -> [(timer from, to, boot, peak, second)].
+    eco: the eco sessions [(readout, enter, leave)] (uptime_model.read_contacts); each block gets those of
+    its readout, so the beacon's own records during them are no edges, as in the uptime model."""
     order = np.argsort(rd, kind="stable")
     rd_sorted = rd[order]
     rd_blocks = rd.copy()
@@ -95,7 +98,11 @@ def block_boots(readouts, assign, boots, drift_of, rd, b2, tm, targets, block_s,
             ext_assign[idx] = assign[i]
             rd_blocks[sel[m]] = idx
             blocks.append((i, idx, x, y))
-    cb = um.contact_boots(ext, ext_assign, boots, drift_of, rd_blocks, b2, tm)
+    of_readout = collections.defaultdict(list)
+    for j, enter, leave in eco:
+        of_readout[j].append((enter, leave))
+    eco_ext = list(eco) + [(idx, enter, leave) for i, idx, _, _ in blocks for enter, leave in of_readout[i]]
+    cb = um.contact_boots(ext, ext_assign, boots, drift_of, rd_blocks, b2, tm, eco=eco_ext)
     out = collections.defaultdict(list)
     for i, idx, x, y in blocks:
         c = cb.get(idx)
@@ -104,11 +111,11 @@ def block_boots(readouts, assign, boots, drift_of, rd, b2, tm, targets, block_s,
     return out
 
 
-def find_steps(readouts, assign, boots, drift_of, rd, b2, tm, lb):
+def find_steps(readouts, assign, boots, drift_of, rd, b2, tm, lb, eco=()):
     counts = np.bincount(rd, minlength=len(readouts))
     targets = [i for i in assign if counts[i] >= MIN_READOUT_CONTACTS and readouts[i]["ct"] is not None
                and readouts[i]["ct"] - 0 > BLOCK_S]
-    coarse = block_boots(readouts, assign, boots, drift_of, rd, b2, tm, targets, BLOCK_S, MIN_BLOCK_CONTACTS)
+    coarse = block_boots(readouts, assign, boots, drift_of, rd, b2, tm, targets, BLOCK_S, MIN_BLOCK_CONTACTS, eco)
     rows, accepted = [], []
     for i, bl in coarse.items():
         good = sorted(b for b in bl if _reliable(b[2:]))
@@ -135,7 +142,7 @@ def find_steps(readouts, assign, boots, drift_of, rd, b2, tm, lb):
     # the later clock must be confirmed by finer blocks
     if accepted:
         fine = block_boots(readouts, assign, boots, drift_of, rd, b2, tm, [a[0] for a in accepted],
-                           FINE_BLOCK_S, 10)
+                           FINE_BLOCK_S, 10, eco)
         for i, row_idx, old in accepted:
             new = um._ts(rows[row_idx][12])
             confirm = sum(1 for b in fine.get(i, []) if _reliable(b[2:]) and abs(b[2] - new) <= STEP_MIN_S)
@@ -185,13 +192,14 @@ def main(argv: list[str]) -> int:
     drifts, centre = um.read_drifts(tz)
     drift_of = lambda b: drifts.get(b, centre)
     print(f"Timer step check: {len(readouts)} readouts; reading the contacts ...", flush=True)
-    rd, b2, tm, lb, _ = um.read_contacts(args.log_dir, readouts, drift_of)
+    eco: list = []
+    rd, b2, tm, lb, _ = um.read_contacts(args.log_dir, readouts, drift_of, None, eco)
     key_of = {(r["Log file"], int(r["First line"])): (r["ID"], r["Period"])
               for r in csv.DictReader((tz / um.READOUTS_CSV).open(encoding="utf-8"))}
     boots = {(r["ID"], r["Period"]): um._ts(r["Boot"])
              for r in csv.DictReader((tz / um.PERIODS_CSV).open(encoding="utf-8"))}
     assign = {i: key_of[(r["file"], r["first"])] for i, r in enumerate(readouts) if (r["file"], r["first"]) in key_of}
-    steps = find_steps(readouts, assign, boots, drift_of, rd, b2, tm, lb)
+    steps = find_steps(readouts, assign, boots, drift_of, rd, b2, tm, lb, eco)
     stops = csc.read_stops(quality / csc.CLOCK_STOPS_CSV)
     for row in steps:
         shift = sum(x[1] for x in stops.get((row[0], row[1]), ()))
