@@ -1146,7 +1146,7 @@ order:
    now rejects p1; the partners' records give no accepted boot, so it stays
    undecided), at period boundaries unchanged 343 / 0 / 6.
 
-   **42 p8 (open).** The readout of 2026-08-25 08:42 (`dsa_20260825_0820.log`
+   **42 p8 (checked 2026-10-26, see below).** The readout of 2026-08-25 08:42 (`dsa_20260825_0820.log`
    line 267886, `Current Timer` 51 213, the only readout of p8, boot
    2026-08-24 18:15, incomplete: 2 112 of 15 120 contacts) holds contacts
    with timers 16 949 – 22 220: dated with p8 they lie on 2026-08-24 22:58 –
@@ -1904,7 +1904,7 @@ Effect on the data: contacts unchanged except 90's readout on 2026-08-13
   practically converged. Exceptions: 154 (2.4 s/day, reliability 0.5) and
   147 (−19.02 → −16.86 s/day): its contacts want about −17 s/day, the H4
   enforcement (19.4) −19 to −20; about 30 s at the end of its 14-day period,
-  within the precision of its records. Open (`ToDo.md` 41).
+  within the precision of its records. Accepted 2026-11-06 (`ToDo.md` 41).
 - **Round 2 also on hints** (14.8): `run_pipeline.py` ran round 2 only when
   the second split decided a readout; the hints of round 1 depended on that.
   Now round 2 also runs when round 1 found hints. Outputs unchanged (round 2
@@ -2204,6 +2204,47 @@ p2, 8 550 s, explained by its clock stops) stays, its later clock now taken
 from the block at timer 68 150 – 82 550 s (peaks 148 / 79, before
 82 550 – 96 950 s, 88 / 37); `unreliable_time_records.csv` and all data
 unchanged.
+
+**RSSI below the default thresholds on the setup night (2026-11-05, ToDo
+47).** Until 2026-08-13 10:55 there are `ok` contacts with a person beacon as
+partner below −80 dBm (down to −100): 29 953 recorded by 34 location tags
+(9 % of their sightings of person beacons that day, 00–10 h) and 3 849 by
+61 other beacons (almost all 10–11 h); none from 2026-08-14 on. Intended:
+the tags were reflashed on the setup night. No change: it is before the
+observation window (from 2026-08-13 18:00), and the contact sync, the edges
+of the uptime model and the partner rule of the lost records use only the
+symmetric threshold (−80 dBm for pairs with a person beacon). An evaluation
+of the setup night itself filters ≥ −80 dBm for sightings of person beacons.
+
+**Undecided readouts without records (2026-11-06, ToDo 53, 54).** Accepted,
+no change: 39 readouts stay undecided in the ID split (38 single `Status: 0`
+lines, and 9 at 2026-08-13 09:54:22 with `Current Timer` 238, where 9 and 57
+booted within minutes and both labels keep the hard rules; all 2026-08-13 to
+2026-08-15) and keep the logged ID. 355 headerless readouts stay without a
+period (`undecided: both periods possible, no contacts`; status-only stubs on
+108 beacons, all days; 3 also in the 39). None of them holds a contact,
+self-report, eco session or voltage, so no record is affected.
+
+**Drift of 147 p1 accepted, 42 p8 relabelled (2026-11-06, ToDo 41).** The
+difference between 147's contact drift (about −17 s/day) and the H4
+enforcement (−19 to −20 s/day), about 30 s at the end of its 14-day period,
+is accepted as for ToDo 45: within the precision of its records, and the
+contacts cannot tell a change of clock from off log-order readouts. 42 p8 in
+section 19 was still headed "open", although its check of 2026-10-26 settled
+it; the heading and ToDo 25 now say so. No change of code or output.
+
+**Test E rerun, slides (2026-11-06).** `generate_output.py --validate-lost
+310` on the current model: 192 readouts treated as not logged (fewer
+eligible than on 2026-10-21), of the 110 with at least 10 partner records in
+the stretch 110 found (100 %), 12 more found without; gap end after the
+removed readout median 13 s, 90 % 3.7 h (3.9 h over the 110 detectable, as
+on the slides). All data byte-identical to the
+regression baseline (169 files), `quality/lost_records_validation.csv` added.
+The slides read test D from `uptime_model_validation_headerless.csv` (they
+had looked for it in `uptime_model_validation.csv` and showed 0 cases) and
+say "not run" when test E's file is missing; the slide of open points now
+separates the accepted points from the open ones of the evaluation and the
+firmware.
 
 ### 21. Dating the records with the uptime model (`model_dating.py`, `generate_output.py`)
 
